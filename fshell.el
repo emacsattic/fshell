@@ -1,14 +1,14 @@
 ;;; fshell.el --- enhancements to shell.el
 
 ;; Copyright (C) 1988, 1993, 1994 Free Software Foundation, Inc.
-;; Copyright (C) 1994, 95, 96, 06, 2008 Noah S. Friedman
+;; Copyright (C) 1994, 95, 96, 06, 08, 2010 Noah S. Friedman
 
 ;; Author: Noah Friedman <friedman@splode.com>
 ;; Maintainer: friedman@splode.com
 ;; Keywords: extensions, processes
 ;; Created: 1994-06-21
 
-;; $Id: fshell.el,v 1.15 2008/07/22 00:51:15 friedman Exp $
+;; $Id: fshell.el,v 1.16 2010/04/08 02:32:44 friedman Exp $
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -21,9 +21,7 @@
 ;; GNU General Public License for more details.
 ;;
 ;; You should have received a copy of the GNU General Public License
-;; along with this program; if not, you can either send email to this
-;; program's maintainer or write to: The Free Software Foundation,
-;; Inc.; 51 Franklin Street, Fifth Floor; Boston, MA 02110-1301, USA.
+;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 ;;; Commentary:
 
@@ -234,6 +232,58 @@ the process.  Any more args are arguments to PROGRAM."
                 (setq dir (expand-file-name dir)))
            (setenv "PWD"
                    (substring dir 0 (1- (length dir))))))))
+
+(defun fshell-input-at-current-prompt-p ()
+  "Returns `t' if the prompt for the next command is visible.
+While process output is occuring and the shell has not displayed a prompt
+for more input, this function should return nil."
+  (save-excursion
+    (goto-char (process-mark (get-buffer-process (current-buffer))))
+    (let ((inhibit-field-text-motion t))
+      (beginning-of-line)
+      (looking-at comint-prompt-regexp))))
+
+(defun fshell-send-commands (proc &rest commands)
+  "Send a sequence of commands to the inferior process as if they were typed interactively.
+PROC specifies the shell process or buffer.
+
+The remaining arguments are commands to be sent, one at a time, to the inferior process.
+If there is only one remaining argument and it is a list, use that list.
+
+Before subsequent commands are sent, the current command must complete \(as
+evidenced by the display of a command prompt in the buffer\).  When the
+final command complete, this function returns."
+  (let ((orig-buffer (current-buffer)))
+    (unwind-protect
+        (let ((cmdlist (if (consp (car commands))
+                           (car commands)
+                         commands))
+              cmd pmark)
+
+          (if (bufferp proc)
+              (setq proc (get-buffer-process proc)))
+          (set-buffer (process-buffer proc))
+
+          (setq pmark (process-mark proc)
+                cmd   cmdlist)
+
+          (accept-process-output proc 1)
+          (while cmd
+            (goto-char pmark)
+            (insert (car cmd))
+            (if (string-lessp "22" emacs-version)
+                (comint-send-input nil t)
+              (comint-send-input))
+            (while (not (fshell-input-at-current-prompt-p))
+              (accept-process-output proc 1)
+              (sit-for 0))
+            (setq cmd (cdr cmd)))
+
+          (goto-char pmark))
+      (set-buffer orig-buffer))))
+
+;; Indent like `while'
+(put 'fshell-send-commands 'lisp-indent-function 1)
 
 (provide 'fshell)
 

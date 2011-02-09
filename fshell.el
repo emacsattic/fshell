@@ -8,7 +8,7 @@
 ;; Keywords: extensions, processes
 ;; Created: 1994-06-21
 
-;; $Id: fshell.el,v 1.16 2010/04/08 02:32:44 friedman Exp $
+;; $Id: fshell.el,v 1.17 2010/11/13 17:56:45 friedman Exp $
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -24,19 +24,6 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 ;;; Commentary:
-
-;; If you give M-x fshell a prefix arg after loading this, it will create a
-;; new shell buffer even if one already exists.  If you give it an explicit
-;; numeric prefix arg, it will try to switch to that numbered shell buffer,
-;; or create it.
-;;
-;; The alternative is to rename the current shell buffer and invoke M-x
-;; shell, which is more keystrokes, especially if you decide to name your
-;; old shell back when you're done with the newer one.
-
-;; rms declined to add this functionality in emacs' shell.el, so I'm
-;; maintaining it separately.
-
 ;;; Code:
 
 (require 'shell)
@@ -57,33 +44,59 @@
 (defvar fshell-buffer-name "*shell*"
   "*Buffer name for shell process.")
 
+;;;###autoload
+(defvar fshell-reuse-visible-buffers nil
+  "*When nil, only switch to existing shell buffers which are not already visible in another window.")
+
+;;;###autoload
+(defvar fshell-reuse-visible-buffer-frames nil
+  "*Specifies frames to search for windows displaying a candidate shell buffer.
+If `visible', search all visible frames.
+If `0', search all visible and iconified frames.
+If `t', search all frames.
+If nil, search only the selected frame.
+If set to a frame object, search only that frame.")
+
 ;; See comments near fshell-pop-to-buffer for an explanation.
 ;;;###autoload (add-hook 'same-window-regexps "^\\*shell\\*\\(\\|<[0-9]+>\\)")
 
+
 ;;;###autoload
 (defun fshell (&optional prefix)
   "Run an inferior shell, with I/O through buffer *shell*.
 The actual name of the buffer can be specified with the variable
-`fshell-buffer-name', but for the sake of brevity the default will be used
-in the examples below.
+`fshell-buffer-name', but for the sake of brevity the default
+\(\"*shell*\"\) will be used in the examples below.
 
 If buffer exists but shell process is not running, make new shell.
 
 If buffer exists and shell process is running, just switch to buffer
  named \"*shell*\".
+
 If an explicit numeric prefix argument is given (or this function is called
   from lisp with a numeric argument), switch to the buffer *shell*<prefix>,
   e.g. \"*shell*<2>\".  If there is no process in that buffer, start one.
-If a prefix argument is given but it is not a number, create a new buffer
-  and start a shell process in it.  This is the same as calling the function
-  from lisp with an argument of `t'.
 
-The previous paragraph describes the behavior of this function whenever it
+If invoked with `\\[universal-argument] \\[fshell]', search for an existing shell buffer
+  whose current directory is the same as that of the current buffer and
+  switch to that one.  If there isn't one already, create a new buffer and
+  start a shell process in it.
+
+If invoked with `\\[universal-argument] \\[universal-argument] \\[fshell]', always create a new shell process
+  in a new buffer.
+This is the same as calling the function from lisp with an argument of `t'.
+
+The previous paragraphs describe the behavior of this function whenever it
 is called from lisp.  If it is called interactively and the variable
 `fshell-default-make-new-shell' is non-`nil', then the meaning of
-non-numeric prefix arguments is reversed,
-i.e. typing `\\[fshell]' without a prefix argument creates a new shell,
-and `\\[universal-argument] \\[fshell]' would switch to the buffer \"*shell*\".
+non-numeric prefix arguments is reversed, i.e. typing `\\[fshell]' without
+a prefix argument creates a new shell, and `\\[universal-argument] \\[fshell]'
+would switch to the buffer \"*shell*\".
+
+The variable `fshell-reuse-visible-buffers' controls whether shell buffers
+  that are already visible in some other window will be considered.
+The variable `fshell-reuse-visible-buffer-frames' controls which frames
+  will be considered when scanning to see if a buffer is already visible.
 
 Program used comes from variable `explicit-shell-file-name',
  or (if that is nil) from the ESHELL environment variable,
@@ -108,27 +121,71 @@ Type \\[describe-mode] in the shell buffer for a list of commands."
        (not (numberp prefix))
        (setq prefix (not prefix)))
 
-  (let ((shell-buffer (fshell-make-new-buffer-name)))
-    (cond
-     ((and (null prefix)
-           (comint-check-proc shell-buffer))
-      (fshell-pop-to-buffer shell-buffer))
-     ;; This next case is done all in the predicate (including side effects
-     ;; like fshell-pop-to-buffer) to avoid extra string consing via multiple
-     ;; concats.
-     ((and (numberp prefix)
-           (let ((bufname (fshell-make-new-buffer-name shell-buffer prefix)))
-             (and (comint-check-proc bufname)
-                  (fshell-pop-to-buffer bufname)))))
-     (t
-      (cond
-       ((numberp prefix)
-        (setq shell-buffer (fshell-make-new-buffer-name shell-buffer prefix)))
-       (prefix
-        (setq shell-buffer (fshell-make-new-buffer-name shell-buffer t))))
-      (fshell-pop-to-buffer
-       (set-buffer (fshell-start-shell shell-buffer)))))))
+  (let (shell-buffer)
+    (cond ((null prefix)
+           (setq shell-buffer (fshell-make-new-buffer-name)))
+          ((numberp prefix)
+           (setq shell-buffer (fshell-make-new-buffer-name nil prefix)))
+          ((and (consp prefix)
+                (= (car prefix) 4)
+                (setq shell-buffer (fshell-process-matching-shell-directory))))
+          (t
+           (setq shell-buffer (fshell-make-new-buffer-name nil t))))
 
+    (if (comint-check-proc shell-buffer)
+        (fshell-pop-to-buffer shell-buffer)
+      (fshell-pop-to-buffer
+       (set-buffer (fshell-start-shell shell-buffer))))))
+
+(defun fshell-buffer-name-p (name)
+  (when (bufferp name)
+    (setq name (buffer-name name)))
+  (save-match-data
+    (string-match (concat "^" (regexp-quote fshell-buffer-name)) name)))
+
+(defun fshell-buffer-local-value-pre22 (variable buffer)
+  "Return the value of VARIABLE in BUFFER.
+If VARIABLE does not have a buffer-local binding in BUFFER, the value
+is the default binding of the variable."
+  (save-excursion
+    (set-buffer buffer)
+    (symbol-value variable)))
+
+;; `buffer-local-value' was introduced as a primitive function in Emacs 22.
+(defalias 'fshell-buffer-local-value
+  (if (fboundp 'buffer-local-value)
+      'buffer-local-value
+    'fshell-buffer-local-value-pre22))
+
+;; Find a shell buffer whose current directory matches that specified by
+;; `dir' (or the same directory as the current buffer).  Only buffers
+;; starting with names matching `fshell-buffer-name' are considered.
+(defun fshell-process-matching-shell-directory (&optional dir)
+  (or dir (setq dir default-directory))
+  (let ((re (concat "^" (regexp-quote fshell-buffer-name)))
+        (buflist nil)
+        (found nil))
+    (save-match-data
+      ;; Build a list of candidate buffers based on name
+      (mapc (lambda (buf)
+              (when (string-match re (buffer-name buf))
+                (setq buflist (cons buf buflist))))
+        ;; scan list in reverse so we build up our matching list in
+        ;; buffer-list order; that gives us the most recently used match
+        ;; first below, if there is more than one.
+        (nreverse (buffer-list))))
+    (while (and buflist (not found))
+      (when (and (string= dir (fshell-buffer-local-value
+                               'default-directory (car buflist)))
+                 (or fshell-reuse-visible-buffers
+                     (not (get-buffer-window
+                           (car buflist)
+                           fshell-reuse-visible-buffer-frames))))
+        (setq found (car buflist)))
+      (setq buflist (cdr buflist)))
+    found))
+
+
 ;; Todo: add prefix argument that will kill current process and start a new one.
 (defun fshell-restart-shell ()
   "Restart shell process in the current buffer if it is exited."

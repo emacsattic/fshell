@@ -8,7 +8,7 @@
 ;; Keywords: extensions, processes
 ;; Created: 1994-06-21
 
-;; $Id: fshell.el,v 1.17 2010/11/13 17:56:45 friedman Exp $
+;; $Id: fshell.el,v 1.18 2012/08/25 18:17:46 friedman Exp $
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -324,7 +324,9 @@ final command complete, this function returns."
           (setq pmark (process-mark proc)
                 cmd   cmdlist)
 
-          (accept-process-output proc 1)
+          (while (not (fshell-input-at-current-prompt-p))
+            (accept-process-output proc .1))
+
           (while cmd
             (goto-char pmark)
             (insert (car cmd))
@@ -332,7 +334,8 @@ final command complete, this function returns."
                 (comint-send-input nil t)
               (comint-send-input))
             (while (not (fshell-input-at-current-prompt-p))
-              (accept-process-output proc 1)
+              (accept-process-output proc .1)
+              ;; redisplay
               (sit-for 0))
             (setq cmd (cdr cmd)))
 
